@@ -1,0 +1,100 @@
+name: Update Switzerland AED Data
+
+on:
+schedule:
+# Läuft jeden Sonntag um 03:00 Uhr nachts UTC
+- cron: '0 3 * * 0'
+workflow_dispatch: # Erlaubt es Ihnen, das Update jederzeit manuell zu starten
+
+jobs:
+update-data:
+runs-on: ubuntu-latest
+steps:
+- name: Checkout Repository
+uses: actions/checkout@v4
+
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.x'
+
+  - name: Install Dependencies
+    run: |
+      pip install osmtogeojson requests
+
+  - name: Fetch and Optimize AED Data
+    run: |
+      python - << 'EOF'
+      import requests
+      import json
+      import os
+      from subprocess import run
+
+      # 1. Overpass-Abfrage definieren (Schweiz Area-ID für Overpass ist standardmässig 3600051701)
+      # Wir nutzen direkt die ID, da {{geocodeArea}} im reinen API-Aufruf nicht funktioniert.
+      overpass_url = "https://overpass-api.de/"
+      query = """
+      [out:json][timeout:90];
+      (
+        node["emergency"="defibrillator"](area:3600051701);
+        way["emergency"="defibrillator"](area:3600051701);
+        relation["emergency"="defibrillator"](area:3600051701);
+      );
+      out body;
+      >;
+      out skel qt;
+      """
+      
+      print("Lade Daten von Overpass API...")
+      response = requests.post(overpass_url, data={'data': query})
+      response.raise_for_status()
+      
+      with open("raw_data.json", "w", encoding="utf-8") as f:
+        f.write(response.text)
+
+      # 2. In GeoJSON konvertieren via osmtogeojson CLI
+      print("Konvertiere in GeoJSON...")
+      run(["osmtogeojson", "raw_data.json"], stdout=open("raw_geojson.json", "w", encoding="utf-8"))
+
+      # 3. Daten-Diät: Nur behalten was uMap wirklich braucht
+      print("Optimiere GeoJSON und entferne Ballast...")
+      with open("raw_geojson.json", "r", encoding="utf-8") as f:
+          geojson = json.load(f)
+
+      # Wir behalten NUR wichtige Tags für die Karte (z.B. Beschreibung zur Erreichbarkeit)
+      allowed_tags = {"name", "emergency", "description", "opening_hours", "access", "operator", "phone"}
+
+      for feature in geojson.get("features", []):
+          # Entferne ID-Typen im Properties-Stamm zur Platzersparnis
+          props = feature.get("properties", {})
+          cleaned_props = {}
+          
+          # Extrahiere nur relevante Tags aus dem OSM-Unterordner
+          osm_tags = props.get("tags", {})
+          for tag in allowed_tags:
+              if tag in osm_tags:
+                  cleaned_props[tag] = osm_tags[tag]
+          
+          # Fallback für Namen falls kein Tag existiert
+          if "name" not in cleaned_props:
+              cleaned_props["name"] = "Defibrillator (AED)"
+
+          feature["properties"] = cleaned_props
+
+      # Speicher die finale, optimierte Datei
+      with open("aed_switzerland.geojson", "w", encoding="utf-8") as f:
+          json.dump(geojson, f, ensure_ascii=False, separators=(',', ':'))
+
+      # Aufräumen
+      if os.path.exists("raw_data.json"): os.remove("raw_data.json")
+      if os.path.exists("raw_geojson.json"): os.remove("raw_geojson.json")
+      print("Optimierung abgeschlossen!")
+      EOF
+
+  - name: Commit and Push changes
+    run: |
+      git config --local user.email "github-actions[bot]@://github.com"
+      git config --local user.name "github-actions[bot]"
+      git add aed_switzerland.geojson
+      git diff-index --quiet HEAD || git commit -m "Automatisches Update der AED-Daten (Schweiz)"
+      git push
