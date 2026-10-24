@@ -10,35 +10,21 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Gibt GitHub Actions die Erlaubnis, die GeoJSON-Datei zu speichern
+      contents: write # Wichtig für die Schreibrechte
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+      - name: Install osmtogeojson
+        run: npm install -g osmtogeojson
 
-      - name: Install Dependencies
+      - name: Fetch Data from OSM France Mirror
         run: |
-          npm install -g osmtogeojson
-          pip install requests
-
-      - name: Fetch and Optimize AED Data
-        run: |
-          cat << 'EOF' > script.py
-          import requests
-          import json
-          import os
-          from subprocess import run
-
-          # Schweiz Area-ID für Overpass
-          # NEU: Wir nutzen den stabilen Mirror von Kumi Systems, da overpass-api.de GitHub blockiert
-          overpass_url = "https://overpass.kumi.systems/api/interpreter"
-          query = """
-          [out:json][timeout:120];
+          # Die Overpass-Abfrage vorbereiten
+          # Wir nutzen overpass.openstreetmap.fr, da dieser Server GitHub-Runner erlaubt
+          cat << 'EOF' > query.oql
+          [out:json][timeout:180];
           (
             node["emergency"="defibrillator"](area:3600051701);
             way["emergency"="defibrillator"](area:3600051701);
@@ -47,55 +33,49 @@ jobs:
           out body;
           >;
           out skel qt;
-          """
-          
-          headers = {
-              "User-Agent": "uMap-Schweiz-AED-Bot/1.0 (Github Actions Automated Script)",
-              "Referer": "https://github.com"
-          }
-          
-          print("Lade Daten vom Kumi-Systems Overpass Mirror...")
-          response = requests.post(overpass_url, data={'data': query}, headers=headers)
-          response.raise_for_status()
-          
-          with open("raw_data.json", "w", encoding="utf-8") as f:
-              f.write(response.text)
-
-          print("Konvertiere in GeoJSON...")
-          with open("raw_geojson.json", "w", encoding="utf-8") as out_f:
-              run(["osmtogeojson", "raw_data.json"], stdout=out_f, check=True)
-
-          print("Optimiere GeoJSON und entferne Ballast...")
-          with open("raw_geojson.json", "r", encoding="utf-8") as f:
-              geojson = json.load(f)
-
-          allowed_tags = {"name", "emergency", "description", "opening_hours", "access", "operator", "phone"}
-
-          for feature in geojson.get("features", []):
-              props = feature.get("properties", {})
-              cleaned_props = {}
-              
-              osm_tags = props.get("tags", {})
-              for tag in allowed_tags:
-                  if tag in osm_tags:
-                      cleaned_props[tag] = osm_tags[tag]
-              
-              if "name" not in cleaned_props:
-                  cleaned_props["name"] = "Defibrillator (AED)"
-
-              feature["properties"] = cleaned_props
-
-          with open("aed_switzerland.geojson", "w", encoding="utf-8") as f:
-              json.dump(geojson, f, ensure_ascii=False, separators=(',', ':'))
-
-          print("Optimierung abgeschlossen!")
           EOF
-          python script.py
+
+          echo "Lade Daten vom französischen OSM-Server..."
+          curl --X POST \
+               --data-urlencode "data@query.oql" \
+               --header "User-Agent: uMap-Schweiz-AED-Bot/1.0" \
+               --fail \
+               --output raw_data.json \
+               "https://overpass.openstreetmap.fr/api/interpreter"
+
+      - name: Convert to GeoJSON and Optimize
+        run: |
+          echo "Konvertiere in GeoJSON..."
+          osmtogeojson raw_data.json > raw_geojson.json
+
+          echo "Entferne Metadaten-Ballast..."
+          # Ein ultraschnelles Inline-Node-Skript wirft alle unnötigen Tags raus
+          node -e '
+          const fs = require("fs");
+          const data = JSON.parse(fs.readFileSync("raw_geojson.json", "utf8"));
+          const allowedTags = ["name", "emergency", "description", "opening_hours", "access", "operator", "phone"];
+          
+          data.features.forEach(f => {
+            const props = f.properties || {};
+            const tags = props.tags || {};
+            const cleanProps = {};
+            
+            allowedTags.forEach(t => {
+              if (tags[t] !== undefined) cleanProps[t] = tags[t];
+            });
+            
+            if (!cleanProps.name) cleanProps.name = "Defibrillator (AED)";
+            f.properties = cleanProps;
+          });
+          
+          fs.writeFileSync("aed_switzerland.geojson", JSON.stringify(data));
+          '
 
       - name: Commit and Push changes
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add aed_switzerland.geojson
+          # Nur pushen, wenn sich wirklich Daten geändert haben
           git diff-index --quiet HEAD || git commit -m "Automatisches Update der AED-Daten (Schweiz)"
           git push
