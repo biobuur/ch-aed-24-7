@@ -35,7 +35,8 @@ jobs:
           from subprocess import run
 
           # Schweiz Area-ID für Overpass
-          overpass_url = "https://overpass-api.de/api/interpreter"
+          # NEU: Wir nutzen den stabilen Mirror von Kumi Systems, da overpass-api.de GitHub blockiert
+          overpass_url = "https://overpass.kumi.systems/api/interpreter"
           query = """
           [out:json][timeout:120];
           (
@@ -48,13 +49,12 @@ jobs:
           out skel qt;
           """
           
-          # NEU: Pflicht-Header für den Overpass-Server, um Fehler 406 zu vermeiden
           headers = {
               "User-Agent": "uMap-Schweiz-AED-Bot/1.0 (Github Actions Automated Script)",
               "Referer": "https://github.com"
           }
           
-          print("Lade Daten von Overpass API...")
+          print("Lade Daten vom Kumi-Systems Overpass Mirror...")
           response = requests.post(overpass_url, data={'data': query}, headers=headers)
           response.raise_for_status()
           
