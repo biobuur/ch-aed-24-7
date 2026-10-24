@@ -35,7 +35,7 @@ jobs:
           from subprocess import run
 
           # Schweiz Area-ID für Overpass
-          overpass_url = "https://overpass-api.de"
+          overpass_url = "https://overpass-api.de/api/interpreter"
           query = """
           [out:json][timeout:120];
           (
@@ -48,8 +48,14 @@ jobs:
           out skel qt;
           """
           
+          # NEU: Pflicht-Header für den Overpass-Server, um Fehler 406 zu vermeiden
+          headers = {
+              "User-Agent": "uMap-Schweiz-AED-Bot/1.0 (Github Actions Automated Script)",
+              "Referer": "https://github.com"
+          }
+          
           print("Lade Daten von Overpass API...")
-          response = requests.post(overpass_url, data={'data': query})
+          response = requests.post(overpass_url, data={'data': query}, headers=headers)
           response.raise_for_status()
           
           with open("raw_data.json", "w", encoding="utf-8") as f:
@@ -88,7 +94,7 @@ jobs:
 
       - name: Commit and Push changes
         run: |
-          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add aed_switzerland.geojson
           git diff-index --quiet HEAD || git commit -m "Automatisches Update der AED-Daten (Schweiz)"
