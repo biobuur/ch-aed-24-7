@@ -10,7 +10,8 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  
+      contents: write # Gibt GitHub Actions die Erlaubnis, die GeoJSON-Datei zu speichern
+    
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -36,7 +37,7 @@ jobs:
           # Schweiz Area-ID für Overpass
           overpass_url = "https://overpass-api.de"
           query = """
-          [out:json][timeout:90];
+          [out:json][timeout:120];
           (
             node["emergency"="defibrillator"](area:3600051701);
             way["emergency"="defibrillator"](area:3600051701);
